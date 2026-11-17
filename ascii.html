@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASCII Christmas Tree</title>
+<style>
+  :root {
+    --bg: #03050b;
+    --gold: #ffd23f;
+    --red: #ff3b4e;
+    --green: #3ddc84;
+    --blue: #4fc3ff;
+    --pink: #ff6bd5;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); overflow: hidden; }
+  body {
+    font-family: "Cascadia Mono", "Consolas", "Menlo", "Courier New", monospace;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  canvas { display: block; position: fixed; inset: 0; }
+
+  /* viền tối quanh màn hình cho có chiều sâu */
+  .vignette {
+    position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 45%, transparent 45%, rgba(0,0,0,.75) 100%);
+  }
+
+  .msg {
+    position: fixed; left: 0; right: 0; bottom: 7vh;
+    text-align: center; pointer-events: none;
+  }
+  .title {
+    display: inline-block;
+    font-size: clamp(22px, 5.2vmin, 64px);
+    font-weight: 700;
+    letter-spacing: .22em;
+    white-space: pre;
+    background: linear-gradient(90deg, var(--red), var(--gold), var(--green), var(--blue), var(--pink), var(--red));
+    background-size: 300% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 0 10px rgba(255, 210, 63, .45));
+    animation: flow 6s linear infinite;
+    opacity: 0;
+    transform: translateY(14px);
+    transition: opacity .6s ease, transform .9s cubic-bezier(.2,.9,.2,1.2);
+  }
+  .sub {
+    margin-top: .7em;
+    font-size: clamp(11px, 2vmin, 20px);
+    letter-spacing: .5em;
+    color: #9fb3ff;
+    text-shadow: 0 0 8px #4fc3ff88;
+    opacity: 0;
+    transition: opacity 1.2s ease .8s;
+  }
+  .msg.show .title { opacity: 1; transform: none; }
+  .msg.show .sub { opacity: .85; }
+  .hint {
+    position: fixed; right: 16px; bottom: 12px;
+    font-size: 11px; color: #46506e; letter-spacing: .1em; pointer-events: none;
+  }
+  @keyframes flow { to { background-position: 300% 0; } }
+</style>
+</head>
+<body>
+  <canvas id="c" aria-label="Cây thông Noel 3D vẽ bằng ký tự ASCII"></canvas>
+  <div class="vignette"></div>
+  <div class="msg" id="msg">
+    <div class="title" id="title"></div>
+    <div class="sub">HAPPY NEW YEAR 2027</div>
+  </div>
+  <div class="hint">nhấn để xem lại · kéo để xoay</div>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Cascadia Mono", Consolas, Menlo, "Courier New", monospace';
+  const cvs = document.getElementById('c');
+  const ctx = cvs.getContext('2d');
+  const msg = document.getElementById('msg');
+  const titleEl = document.getElementById('title');
+  const TITLE = 'MERRY CHRISTMAS';
+
+  const rand = Math.random, TAU = Math.PI * 2;
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  const easeOutBounce = x => {
+    const n = 7.5625, d = 2.75;
+    if (x < 1 / d) return n * x * x;
+    if (x < 2 / d) return n * (x -= 1.5 / d) * x + 0.75;
+    if (x < 2.5 / d) return n * (x -= 2.25 / d) * x + 0.9375;
+    return n * (x -= 2.625 / d) * x + 0.984375;
+  };
+  const easeOutBack = x => 1 + 2.7 * Math.pow(x - 1, 3) + 1.7 * Math.pow(x - 1, 2);
+
+  // ---------- mốc thời gian hiệu ứng xuất hiện ----------
+  const T_TREE = 0.2;    // lá mọc từ dưới lên
+  const T_LIGHT = 2.8;   // đèn bật từ đỉnh xuống
+  const T_STAR = 4.3;    // sao rơi xuống
+  const T_GIFT = 5.4;    // quà bật lên
+  const T_TEXT = 6.5;    // chữ hiện
+
+  // ---------- bảng màu ----------
+  const pal = [], palMap = new Map();
+  const P = css => {
+    let i = palMap.get(css);
+    if (i === undefined) { i = pal.length; pal.push(css); palMap.set(css, i); }
+    return i;
+  };
+  const rgb = (r, g, b) => `rgb(${r | 0},${g | 0},${b | 0})`;
+  const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const ramp = (stops, n) => Array.from({ length: n }, (_, i) => {
+    const t = i / (n - 1) * (stops.length - 1);
+    const k = Math.min(stops.length - 2, Math.floor(t));
+    return P(rgb(...lerp3(stops[k], stops[k + 1], t - k)));
+  });
+  const GREEN = ramp([[2, 26, 14], [10, 80, 38], [34, 160, 72], [150, 255, 175]], 28);
+  const SNOW = ramp([[40, 55, 90], [130, 150, 200], [235, 242, 255]], 8);
+  const BROWN = ramp([[40, 20, 8], [110, 64, 28], [190, 120, 60]], 8);
+  const GOLD = ramp([[120, 70, 0], [255, 190, 30], [255, 250, 200]], 10);
+  const MATRIX = P('#b8ffcf');
+  const WHITE = P('#ffffff');
+
+  const BULB = [[255, 59, 78], [255, 210, 63], [79, 195, 255], [255, 107, 213], [255, 160, 60], [140, 255, 150]];
+  const BULB_PAL = BULB.map(c => ramp([[c[0] * .25, c[1] * .25, c[2] * .25], c, lerp3(c, [255, 255, 255], .7)], 8));
+
+  // quầng sáng (vẽ cộng sáng)
+  const sprite = c => {
+    const s = document.createElement('canvas'); s.width = s.height = 64;
+    const g = s.getContext('2d');
+    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},1)`);
+    gr.addColorStop(.25, `rgba(${c[0]},${c[1]},${c[2]},.45)`);
+    gr.addColorStop(1, `rgba(${c[0]},${c[1]},${c[2]},0)`);
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    return s;
+  };
+  const BULB_GLOW = BULB.map(sprite);
+  const GOLD_GLOW = sprite([255, 200, 60]);
+  const WARM_GLOW = sprite([255, 150, 60]);
+  const WHITE_GLOW = sprite([220, 235, 255]);
+
+  // ---------- lưới ký tự ----------
+  let W, H, fs, cw, cols, rows, N, X, cx, cy, top, bot, treeH, R, ground, D, bgGrad;
+  let chars, colr, zbuf, buckets;
+  const TILT = 0.2;      // camera nhìn hơi từ trên xuống
+  const TIERS = 7;       // số tầng cành
+  const L = (() => { const v = [-0.55, -0.6, 0.62], m = Math.hypot(...v); return v.map(x => x / m); })();
+
+  let leaves = [], tinsel = [], bulbs = [], balls = [], gifts = [], snow = [], sparks = [];
+
+  function resize() {
+    const DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = innerWidth; H = innerHeight;
+    cvs.width = W * DPR; cvs.height = H * DPR;
+    cvs.style.width = W + 'px'; cvs.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    fs = Math.max(7, Math.min(H / 72, W / 68));
+    ctx.font = `${fs}px ${FONT}`;
+    cw = ctx.measureText('M').width;
+    cols = Math.ceil(W / cw); rows = Math.ceil(H / fs); N = cols * rows;
+    X = fs / cw;
+    cx = cols / 2; cy = rows * 0.42;
+    top = rows * 0.15; bot = rows * 0.64; treeH = bot - top;
+    R = treeH * 0.4;
+    ground = bot + treeH * 0.09;
+    D = rows * 1.6;
+    chars = new Array(N); colr = new Int16Array(N); zbuf = new Float32Array(N);
+    buckets = pal.map(() => []);
+    bgGrad = ctx.createRadialGradient(W / 2, H * .42, 0, W / 2, H * .42, Math.max(W, H) * .75);
+    bgGrad.addColorStop(0, '#0e1838'); bgGrad.addColorStop(.55, '#060a1a'); bgGrad.addColorStop(1, '#020309');
+    build();
+  }
+
+  function build() {
+    // lá: phân bố theo diện tích nón, đa số nằm sát mặt ngoài
+    const nLeaves = clamp(Math.round(N * 1.1), 3500, 11000);
+    leaves = Array.from({ length: nLeaves }, () => {
+      const h = Math.sqrt(rand());
+      const a = rand() * TAU;
+      return {
+        h, ca: Math.cos(a), sa: Math.sin(a),
+        k: rand() < 0.8 ? 0.9 + rand() * 0.1 : 0.55 + rand() * 0.35,
+        rev: T_TREE + (1 - h) * 2.2 + rand() * 0.35,
+        snowy: rand() < 0.12,
+      };
+    });
+    // dây kim tuyến vàng xoắn
+    tinsel = Array.from({ length: 520 }, (_, i) => {
+      const h = 0.05 + (i / 520) * 0.93;
+      return { h, a: h * 4.5 * TAU, i };
+    });
+    // dây đèn màu xoắn ngược pha
+    bulbs = Array.from({ length: 84 }, (_, i) => {
+      const h = 0.07 + (i / 84) * 0.9;
+      return { h, a: h * 4.5 * TAU + Math.PI, c: i % BULB.length, sp: 2 + rand() * 4, off: rand() * TAU };
+    });
+    // quả châu
+    balls = Array.from({ length: 34 }, () => ({
+      h: 0.15 + rand() * 0.8, a: rand() * TAU, c: (rand() * BULB.length) | 0,
+      ch: rand() < .5 ? '@' : 'O', sp: 1 + rand() * 2, off: rand() * TAU,
+    }));
+    // tuyết
+    snow = Array.from({ length: Math.round(cols * 0.9) }, () => ({
+      x: rand() * cols, y: rand() * rows, d: rand(), ph: rand() * TAU,
+    }));
+    // hộp quà
+    const Rc = R * X;
+    const defs = [
+      { dx: -1.22, w: .50, h: .40, c: [200, 30, 50],  r: [255, 215, 70], z: 0 },
+      { dx: -0.66, w: .34, h: .27, c: [30, 110, 220], r: [240, 245, 255], z: 0 },
+      { dx: 0.40,  w: .40, h: .32, c: [170, 40, 190], r: [255, 215, 70], z: 0 },
+      { dx: 0.86,  w: .52, h: .44, c: [230, 170, 20], r: [210, 30, 50],  z: 0 },
+      { dx: -0.20, w: .30, h: .22, c: [20, 160, 150], r: [255, 110, 210], z: 1 },
+    ];
+    gifts = defs.map((g, i) => {
+      const w = Math.max(6, Math.round(g.w * Rc));
+      const h = Math.max(3, Math.round(g.h * R));
+      return {
+        x0: Math.round(cx + g.dx * Rc), y0: Math.round(ground + 1 + g.z * 2), w, h,
+        rib: Math.floor(w / 2) - 1,
+        face: P(rgb(...g.c)), side: P(rgb(...lerp3(g.c, [0, 0, 0], .5))),
+        top: P(rgb(...lerp3(g.c, [255, 255, 255], .35))), ribbon: P(rgb(...g.r)),
+        start: T_GIFT + [1, 3, 2, 0, 4][i] * 0.22,
+      };
+    });
+    buckets = pal.map(() => []);
+  }
+
+  // ---------- vẽ vào lưới ----------
+  let PX = 0, PY = 0, PF = 1;
+  function proj(x, y, z) {
+    PF = D / (D - z);
+    PX = cx + x * PF * X;
+    PY = cy + (y - cy) * PF + z * TILT;
+  }
+  function put(c, r, ch, p, z) {
+    c = Math.round(c); r = Math.round(r);
+    if (c < 0 || c >= cols || r < 0 || r >= rows) return false;
+    const i = r * cols + c;
+    if (z < zbuf[i]) return false;
+    zbuf[i] = z; chars[i] = ch; colr[i] = p;
+    return true;
+  }
+  const cellZ = (c, r) => {
+    c = Math.round(c); r = Math.round(r);
+    return (c < 0 || c >= cols || r < 0 || r >= rows) ? -Infinity : zbuf[r * cols + c];
+  };
+
+  const RAMP = '.:-=+*#%@';
+  const NOISE = '01#$%&*+@?';
+  const glows = [];
+  function glow(img, c, r, size, a) { glows.push(img, c, r, size, a); }
+
+  function burst(c, r, n, colors, speed) {
+    for (let i = 0; i < n; i++) {
+      const a = rand() * TAU, v = speed * (0.3 + rand());
+      sparks.push({ x: c, y: r, vx: Math.cos(a) * v * X * .6, vy: Math.sin(a) * v * .6, life: 0, max: .6 + rand() * .9, c: colors[(rand() * colors.length) | 0] });
+    }
+  }
+
+  // ---------- điều khiển ----------
+  let t = 0, last = performance.now(), spin = 0, spinVel = 0, drag = null, starLanded = false, textShown = false;
+  function restart() {
+    t = 0; spin = 0; spinVel = 0; sparks = []; starLanded = false; textShown = false;
+    msg.classList.remove('show'); titleEl.textContent = '';
+    build();
+  }
+  let downX = 0, moved = false;
+  addEventListener('pointerdown', e => { drag = e.clientX; downX = e.clientX; moved = false; });
+  addEventListener('pointermove', e => {
+    if (drag === null) return;
+    const dx = e.clientX - drag; drag = e.clientX;
+    if (Math.abs(e.clientX - downX) > 6) moved = true;
+    spin += dx * 0.01; spinVel = dx * 0.6;
+  });
+  addEventListener('pointerup', () => { drag = null; if (!moved) restart(); });
+  addEventListener('resize', resize);
+
+  // chữ giải mã dần
+  function decodeTitle(p) {
+    let s = '';
+    for (let i = 0; i < TITLE.length; i++) {
+      const ch = TITLE[i];
+      if (ch === ' ' || p > (i + 1) / TITLE.length) s += ch;
+      else s += NOISE[(rand() * NOISE.length) | 0];
+    }
+    titleEl.textContent = s;
+  }
+
+  // ---------- khung hình ----------
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now; t += dt;
+
+    // xoay: nhanh lúc mới hiện rồi chậm dần, có quán tính khi kéo
+    if (drag === null) {
+      spinVel *= Math.pow(0.04, dt);
+      spin += (0.5 + 2.2 * Math.exp(-t / 1.4)) * dt + spinVel * dt * 0.02;
+    }
+    const cs = Math.cos(spin), sn = Math.sin(spin);
+
+    chars.fill(' '); colr.fill(-1); zbuf.fill(-1e12); glows.length = 0;
+
+    // nền tuyết dưới gốc
+    const groundRev = clamp(t / 0.8, 0, 1);
+    const rx = R * X * 1.75, ry = Math.max(2.5, R * .2);
+    for (let r = Math.floor(ground - ry); r <= ground + ry; r++) {
+      for (let c = Math.floor(cx - rx); c <= cx + rx; c++) {
+        const e = ((c - cx) / rx) ** 2 + ((r - ground) / ry) ** 2;
+        if (e > groundRev) continue;
+        const hsh = ((c * 73856093) ^ (r * 19349663)) >>> 0;
+        const b = clamp((1 - e) * 0.7 + (r - ground) / ry * 0.25 + 0.15, 0, 1);
+        put(c, r, '.,:-~'[hsh % 5], SNOW[Math.round(b * 7)], -1e10);
+      }
+    }
+
+    // thân cây (hình trụ xoay)
+    if (t > 0.1) {
+      const rt = R * 0.1;
+      for (let y = bot - 2; y <= ground; y += 0.5) {
+        for (let k = 0; k < 36; k++) {
+          const a = k / 36 * TAU;
+          const ca = Math.cos(a) * cs - Math.sin(a) * sn, sa = Math.sin(a) * cs + Math.cos(a) * sn;
+          proj(ca * rt, y, sa * rt);
+          const b = clamp(0.15 + 0.85 * Math.max(0, ca * L[0] + sa * L[2]), 0, 1);
+          put(PX, PY, (k % 3) ? '|' : '#', BROWN[Math.round(b * 7)], sa * rt);
+        }
+      }
+    }
+
+    // lá thông
+    for (const l of leaves) {
+      if (t < l.rev) continue;
+      const tier = l.h * TIERS, loc = tier - Math.floor(tier);
+      const env = 0.05 + 0.95 * l.h;
+      const rr = R * env * (0.58 + 0.42 * Math.pow(loc, 0.7)) * l.k;
+      const ca = l.ca * cs - l.sa * sn, sa = l.sa * cs + l.ca * sn;
+      const z = sa * rr;
+      proj(ca * rr, top + l.h * treeH + loc * 0.8, z);
+      const d = (ca * L[0] - 0.55 * L[1] + sa * L[2]) / 1.14;
+      let b = 0.08 + 0.78 * Math.max(0, d) + 0.3 * Math.pow(loc, 5);
+      b *= 0.45 + 0.55 * (l.k - 0.55) / 0.45;
+      b = clamp(b, 0, 1);
+      let ch, p;
+      if (t < l.rev + 0.4) { ch = NOISE[(rand() * NOISE.length) | 0]; p = MATRIX; }
+      else if (l.snowy && loc > 0.82 && b > 0.35) { ch = '*'; p = SNOW[4 + Math.round(b * 3)]; }
+      else { ch = RAMP[Math.min(RAMP.length - 1, (b * RAMP.length) | 0)]; p = GREEN[Math.round(b * 27)]; }
+      put(PX, PY, ch, p, z);
+    }
+
+    // kim tuyến vàng
+    for (const s of tinsel) {
+      if (t < T_LIGHT + s.h * 1.5) continue;
+      const rr = R * (0.05 + 0.95 * s.h) * 1.01;
+      const a = s.a + spin, ca = Math.cos(a), sa = Math.sin(a);
+      const z = sa * rr + 0.3;
+      proj(ca * rr, top + s.h * treeH + 0.6, z);
+      const shim = 0.5 + 0.5 * Math.sin(s.i * 0.55 - t * 7);
+      const b = clamp((0.25 + 0.75 * (sa + 1) / 2) * (0.55 + 0.45 * shim), 0, 1);
+      put(PX, PY, shim > .75 ? '*' : '~', GOLD[Math.round(b * 9)], z);
+    }
+
+    // đèn màu
+    const bulbHits = [];
+    for (const bl of bulbs) {
+      if (t < T_LIGHT + bl.h * 1.5) continue;
+      const rr = R * (0.05 + 0.95 * bl.h) * 1.03;
+      const a = bl.a + spin, ca = Math.cos(a), sa = Math.sin(a);
+      const z = sa * rr + 0.6;
+      proj(ca * rr, top + bl.h * treeH + 0.5, z);
+      const on = 0.5 + 0.5 * Math.sin(t * bl.sp + bl.off);
+      const front = (sa + 1) / 2;
+      const b = clamp(0.3 + 0.7 * on, 0, 1) * (0.4 + 0.6 * front);
+      if (put(PX, PY, on > .35 ? 'o' : '.', BULB_PAL[bl.c][Math.round(b * 7)], z)) bulbHits.push(bl.c, PX, PY, z, b * PF);
+    }
+    // quả châu
+    for (const o of balls) {
+      if (t < T_LIGHT + 0.3 + o.h * 1.5) continue;
+      const rr = R * (0.05 + 0.95 * o.h) * 1.04;
+      const a = o.a + spin, ca = Math.cos(a), sa = Math.sin(a);
+      const z = sa * rr + 0.8;
+      proj(ca * rr, top + o.h * treeH + 0.7, z);
+      const b = clamp((0.35 + 0.65 * (sa + 1) / 2) * (0.75 + 0.25 * Math.sin(t * o.sp + o.off)), 0, 1);
+      if (put(PX, PY, o.ch, BULB_PAL[o.c][Math.round(b * 7)], z)) bulbHits.push(o.c, PX, PY, z, b * 0.7 * PF);
+    }
+
+    // ngôi sao vàng 3D xoay
+    const starY = top - R * 0.12;
+    if (t > T_STAR) {
+      const p = clamp((t - T_STAR) / 0.9, 0, 1);
+      const sy = starY - (1 - easeOutBounce(p)) * (starY + 8);
+      if (p >= 1 && !starLanded) {
+        starLanded = true;
+        burst(cx, sy, 90, [GOLD[9], GOLD[7], WHITE, BULB_PAL[0][6], BULB_PAL[2][6]], 18);
+      }
+      const ro = Math.max(3, R * 0.2), ri = ro * 0.45;
+      const sAng = t * 1.6, sc = Math.cos(sAng);
+      // tia sáng xoay chậm phía sau
+      if (starLanded) {
+        const len = ro * 3.2;
+        for (let k = 0; k < 12; k++) {
+          const a = k / 12 * TAU + t * 0.25;
+          for (let s = ro * 1.2; s < len; s += 0.6) {
+            const fade = 1 - s / len;
+            if (rand() > fade * 0.9) continue;
+            put(cx + Math.cos(a) * s * X, sy + Math.sin(a) * s, s < len * .5 ? '+' : '.', GOLD[Math.round(fade * 6)], 1e7);
+          }
+        }
+      }
+      for (let gy = -ro; gy <= ro; gy += 0.5) {
+        for (let gx = -ro; gx <= ro; gx += 0.5 / X) {
+          if (Math.abs(sc) < 0.06) { if (Math.abs(gx) > 0.25 / X) continue; }
+          const u = Math.abs(sc) < 0.06 ? 0 : gx / sc;
+          const dist = Math.hypot(u, gy);
+          let th = Math.atan2(u, -gy); if (th < 0) th += TAU;
+          const seg = TAU / 5, k = (th % seg) / seg;
+          const lim = ro + (ri - ro) * (1 - Math.abs(1 - 2 * k));
+          if (dist > lim) continue;
+          const b = clamp(0.35 + 0.45 * Math.abs(sc) + 0.4 * (1 - dist / lim), 0, 1);
+          put(cx + gx * X, sy + gy, b > .85 ? '@' : b > .65 ? '#' : '*', GOLD[Math.round(b * 9)], 1e8);
+        }
+      }
+      glow(GOLD_GLOW, cx, sy, ro * fs * (5 + Math.sin(t * 3) * .6), 0.55);
+      if (p < 1) glow(WHITE_GLOW, cx, sy, ro * fs * 2.5, 0.4);
+      // vòng sáng loang ra khi sao chạm đỉnh
+      const since = t - T_STAR - 0.9;
+      if (since > 0 && since < 0.8) {
+        const rad = since * R * 1.6, n = Math.max(24, Math.round(rad * 6));
+        for (let k = 0; k < n; k++) {
+          const a = k / n * TAU;
+          put(cx + Math.cos(a) * rad * X, sy + Math.sin(a) * rad * 0.9, '*', GOLD[Math.round((1 - since / .8) * 9)], 1e7);
+        }
+      }
+    }
+
+    // hộp quà
+    for (const g of gifts) drawGift(g, (t - g.start) / 0.75);
+
+    // tuyết rơi
+    for (const s of snow) {
+      s.y += (1.5 + 6 * s.d) * dt;
+      s.x += Math.sin(t * 0.8 + s.ph) * 0.8 * dt * X;
+      if (s.y > rows) { s.y = -1; s.x = rand() * cols; }
+      const p = SNOW[2 + Math.round(s.d * 5)];
+      put(s.x, s.y, s.d > .75 ? '*' : s.d > .4 ? '+' : '.', p, s.d > .7 ? 1e9 : -1e9);
+    }
+
+    // tia lấp lánh ngẫu nhiên trên cây
+    if (t > T_LIGHT && rand() < 0.5) {
+      const h = 0.1 + rand() * 0.88, a = rand() * Math.PI;
+      const rr = R * (0.05 + 0.95 * h);
+      sparks.push({ x: cx + Math.cos(a) * rr * X, y: top + h * treeH, vx: 0, vy: 0, life: 0, max: .35, c: WHITE, tw: true });
+    }
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i];
+      s.life += dt;
+      if (s.life > s.max) { sparks.splice(i, 1); continue; }
+      s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 9 * dt; s.vx *= 0.97;
+      const k = s.life / s.max;
+      put(s.x, s.y, s.tw ? (k < .5 ? '+' : '*') : k < .4 ? '*' : k < .75 ? '+' : '.', s.c, 2e9);
+      if (s.tw) glow(WHITE_GLOW, s.x, s.y, fs * 2.2, 0.5 * (1 - Math.abs(k * 2 - 1)));
+    }
+
+    // chữ
+    if (t > T_TEXT) {
+      if (!textShown) { textShown = true; msg.classList.add('show'); }
+      const p = (t - T_TEXT) / 1.4;
+      if (p <= 1.05) decodeTitle(p);
+    }
+
+    render(bulbHits);
+    requestAnimationFrame(frame);
+  }
+
+  function drawGift(g, p) {
+    if (p <= 0) return;
+    const e = easeOutBounce(Math.min(1, p));
+    const y0 = Math.round(g.y0 - (1 - e) * (g.y0 + g.h + 4));
+    const { x0, w, h } = g, dd = 2, Z = 5e8 + g.y0;
+    const mid = Math.floor(h / 2);
+    // mặt trước
+    for (let r = 0; r < h; r++) {
+      for (let c = 0; c < w; c++) {
+        const v = c === g.rib || c === g.rib + 1, hz = r === mid;
+        put(x0 + c, y0 - 1 - r, v && hz ? '#' : v ? '|' : hz ? '=' : (r + c) % 2 ? '#' : '%', v || hz ? g.ribbon : g.face, Z);
+      }
+    }
+    // mặt bên (lệch lên phải)
+    for (let k = 1; k <= dd; k++) {
+      for (let r = 0; r < h; r++) put(x0 + w - 1 + k, y0 - 1 - r - k, r === mid ? '/' : '%', r === mid ? g.ribbon : g.side, Z);
+    }
+    // mặt trên
+    for (let k = 1; k <= dd; k++) {
+      for (let c = 0; c < w; c++) {
+        const v = c === g.rib || c === g.rib + 1;
+        put(x0 + c + k, y0 - h - k + 0, v ? '/' : '=', v ? g.ribbon : g.top, Z + 1);
+      }
+    }
+    // nơ
+    const bx = x0 + g.rib + dd, by = y0 - h - dd - 1;
+    const bow = p > 1 ? Math.min(1, (p - 1) * 3) : 0;
+    if (bow > 0) {
+      '(\\o/)'.split('').forEach((ch, i) => put(bx - 2 + i, by, ch, g.ribbon, Z + 2));
+      if (p < 1.4) glow(GOLD_GLOW, bx, by, fs * 4, 0.6 * (1 - (p - 1) / .4));
+    }
+    if (p >= 1 && p < 1.03) burst(x0 + w / 2, y0 - h, 18, [g.ribbon, g.top, WHITE], 10);
+  }
+
+  function render(bulbHits) {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
+
+    // ánh ấm phía sau cây khi đèn đã bật
+    const warm = clamp((t - T_LIGHT) / 2, 0, 1);
+    if (warm > 0) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.16 * warm;
+      const s = treeH * fs * 1.9;
+      ctx.drawImage(WARM_GLOW, W / 2 - s / 2, (top + treeH * .55) * fs - s / 2, s, s);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    // gom theo màu để vẽ nhanh
+    if (buckets.length < pal.length) for (let i = buckets.length; i < pal.length; i++) buckets.push([]);
+    for (const b of buckets) b.length = 0;
+    for (let i = 0; i < N; i++) if (colr[i] >= 0) buckets[colr[i]].push(i);
+    ctx.font = `${fs}px ${FONT}`;
+    ctx.textBaseline = 'top';
+    for (let p = 0; p < buckets.length; p++) {
+      const list = buckets[p];
+      if (!list.length) continue;
+      ctx.fillStyle = pal[p];
+      for (const i of list) ctx.fillText(chars[i], (i % cols) * cw, ((i / cols) | 0) * fs);
+    }
+
+    // quầng sáng cộng màu
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < bulbHits.length; i += 5) {
+      const c = bulbHits[i], px = bulbHits[i + 1], py = bulbHits[i + 2], z = bulbHits[i + 3], b = bulbHits[i + 4];
+      if (cellZ(px, py) > z + 1e-3) continue;
+      const s = fs * (2.4 + b * 2.6);
+      ctx.globalAlpha = clamp(b * 0.75, 0, 1);
+      ctx.drawImage(BULB_GLOW[c], Math.round(px) * cw + cw / 2 - s / 2, Math.round(py) * fs + fs / 2 - s / 2, s, s);
+    }
+    for (let i = 0; i < glows.length; i += 5) {
+      const img = glows[i], c = glows[i + 1], r = glows[i + 2], s = glows[i + 3], a = glows[i + 4];
+      ctx.globalAlpha = clamp(a, 0, 1);
+      ctx.drawImage(img, c * cw + cw / 2 - s / 2, r * fs + fs / 2 - s / 2, s, s);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  resize();
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) t = 8;
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
