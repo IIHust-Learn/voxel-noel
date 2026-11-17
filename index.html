@@ -90,8 +90,29 @@
   }
   .dock button.primary:hover { background: linear-gradient(180deg, #ff6d83, #e52a50); }
 
+  .sound {
+    position: fixed; top: max(14px, env(safe-area-inset-top)); right: 16px; z-index: 5;
+    display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px;
+    border-radius: 10px; border: 1px solid var(--line); background: var(--glass); color: var(--ink);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    font: 400 10px/1 "Silkscreen", monospace; letter-spacing: .14em; cursor: pointer;
+    transition: border-color .2s, background .2s;
+  }
+  .sound:hover { border-color: rgba(255, 255, 255, .3); }
+  .sound .eq { display: flex; align-items: flex-end; gap: 2px; height: 12px; }
+  .sound .eq i { width: 3px; height: 3px; background: var(--gold); box-shadow: 0 0 6px var(--gold); }
+  .sound.on .eq i { animation: eq .9s ease-in-out infinite; }
+  .sound.on .eq i:nth-child(2) { animation-delay: -.3s; }
+  .sound.on .eq i:nth-child(3) { animation-delay: -.6s; }
+  @keyframes eq { 0%, 100% { height: 3px; } 50% { height: 12px; } }
+  .credit {
+    position: fixed; top: calc(max(16px, env(safe-area-inset-top)) + 22px); left: 20px;
+    font: italic 400 11px/1.4 "Fraunces", Georgia, serif; color: #6b77a3; max-width: 60vw;
+    opacity: 0; animation: fadeIn 1s ease 1.6s forwards;
+  }
+  .credit a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
   .hint {
-    position: fixed; top: max(18px, env(safe-area-inset-top)); right: 20px;
+    position: fixed; top: calc(max(14px, env(safe-area-inset-top)) + 46px); right: 20px;
     font-size: 10px; letter-spacing: .14em; color: #5b6694; text-align: right; line-height: 1.8;
     opacity: 0; animation: fadeIn 1s ease 2s forwards;
   }
@@ -125,6 +146,9 @@
   <div class="grain"></div>
 
   <div class="brand"><i></i>VOXEL NOEL <em>2026</em></div>
+  <div class="credit">♪ <a href="https://commons.wikimedia.org/wiki/File:Jingle_Bells_(2020)_-_Starlifter_and_Roots_in_Blue_-_United_States_Air_Force_Band_of_Mid-America.mp3" target="_blank" rel="noopener">Jingle Bells</a> — US Air Force Band of Mid-America · Public domain</div>
+  <button class="sound" id="soundBtn" type="button" aria-pressed="false" aria-label="Bật hoặc tắt nhạc"><span class="eq"><i></i><i></i><i></i></span><span id="soundLabel">CHẠM ĐỂ BẬT NHẠC</span></button>
+  <audio id="bgm" src="music/jingle-bells.mp3" preload="auto" loop playsinline></audio>
   <div class="hint">KÉO ĐỂ XOAY · CUỘN ĐỂ ZOOM<br>CHẠM BẦU TRỜI ĐỂ BẮN PHÁO HOA</div>
   <p class="wish" id="wish"></p>
   <div class="toast" id="toast"></div>
@@ -1061,6 +1085,71 @@ function toast(s) {
   clearTimeout(toast.t); toast.t = setTimeout(() => toastEl.classList.remove('show'), 1800);
 }
 
+/* ============================================================
+   Nhạc nền — trình duyệt (nhất là iPhone) chỉ cho phát sau lần chạm đầu tiên
+   ============================================================ */
+const bgm = document.getElementById('bgm');
+const soundBtn = document.getElementById('soundBtn');
+const soundLabel = document.getElementById('soundLabel');
+let musicWanted = true;
+try { musicWanted = localStorage.getItem('voxel-noel-music') !== 'off'; } catch (e) { /* bộ nhớ bị chặn: mặc định bật */ }
+let fadeRaf = 0;
+function fadeTo(target, ms, done) {
+  cancelAnimationFrame(fadeRaf);
+  const from = bgm.volume, s0 = performance.now();
+  const f = () => {
+    const k = Math.min(1, (performance.now() - s0) / ms);
+    bgm.volume = from + (target - from) * k;   // iOS bỏ qua volume, vẫn phát bình thường
+    if (k < 1) fadeRaf = requestAnimationFrame(f); else if (done) done();
+  };
+  f();
+}
+function setSoundUi(on) {
+  soundBtn.classList.toggle('on', on);
+  soundBtn.setAttribute('aria-pressed', String(on));
+  soundLabel.textContent = on ? 'NHẠC: BẬT' : musicWanted ? 'CHẠM ĐỂ BẬT NHẠC' : 'NHẠC: TẮT';
+}
+let pauseTimer = 0;
+async function startMusic() {
+  clearTimeout(pauseTimer);
+  try {
+    if (bgm.paused) bgm.volume = 0;
+    await bgm.play();
+    fadeTo(0.7, 2500);
+    setSoundUi(true);
+    return true;
+  } catch (e) { setSoundUi(false); return false; }
+}
+function stopMusic() {
+  fadeTo(0, 450);
+  clearTimeout(pauseTimer);
+  pauseTimer = setTimeout(() => { if (!musicWanted) bgm.pause(); }, 500);   // không phụ thuộc rAF (bị hãm khi tab ẩn)
+  setSoundUi(false);
+}
+soundBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  musicWanted = !soundBtn.classList.contains('on');
+  try { localStorage.setItem('voxel-noel-music', musicWanted ? 'on' : 'off'); } catch (err) { /* bỏ qua */ }
+  if (musicWanted) startMusic(); else stopMusic();
+});
+function unlockAudio(e) {
+  if (soundBtn.contains(e.target)) return;   // nút nhạc tự xử lý
+  if (!musicWanted || !bgm.paused) return dropUnlock();
+  startMusic().then(ok => { if (ok) dropUnlock(); });
+}
+function dropUnlock() {
+  removeEventListener('pointerup', unlockAudio, true);
+  removeEventListener('keydown', unlockAudio, true);
+}
+addEventListener('pointerup', unlockAudio, true);
+addEventListener('keydown', unlockAudio, true);
+setSoundUi(false);
+if (musicWanted) startMusic().then(ok => { if (ok) dropUnlock(); });   // máy tính cho tự phát thì phát luôn
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { if (!bgm.paused) { bgm.pause(); bgm.dataset.resume = '1'; } }
+  else if (bgm.dataset.resume) { delete bgm.dataset.resume; bgm.play().catch(() => {}); }
+});
+
 let t = 0, wishShown = false, starLanded = false, nextAutoFw = T.autoFw;
 buildText(currentMsg, T.text);
 
@@ -1098,6 +1187,7 @@ function replay() {
   dock.classList.remove('show');
   intro.active = true; intro.start = 0; controls.enabled = false; controls.autoRotate = false;
   lampLights.forEach(l => (l.intensity = 0));
+  if (!bgm.paused) bgm.currentTime = 0;
 }
 
 /* click (không kéo) trên canvas = bắn pháo hoa vào chỗ chạm */
